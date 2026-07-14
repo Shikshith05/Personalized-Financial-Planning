@@ -237,6 +237,47 @@ Thank you for using SMS Classifier!
 | Flight booking confirmed. PNR: ABC123 | Travel |
 | Hey, how are you? | Personal |
 
+### 4. Full Finance Tracker Pipeline (integrated from sms_classifier_lstm_cnn)
+
+Beyond the single 8-class classifier above, this project now includes the
+end-to-end pipeline ported from the `sms_classifier_lstm_cnn` project:
+
+```
+SMS text
+  → regex preprocessing (preprocessing/preprocess.py — SMSPreprocessor.clean_text)
+  → Binary Transaction / Non-Transaction decision
+    (derived from this project's CNN+GRU model, models/saved/best_model.keras)
+  → if Non-Transaction: return immediately (same response shape as the
+    original LSTM+CNN project)
+  → if Transaction:
+      → regex entity extraction (transaction_extractor.py)
+      → CNN+GRU Transaction Subcategory classification
+        (models/saved/fintech_model.keras, trained by train_fintech.py)
+```
+
+Run it with:
+
+```bash
+# Interactive
+python predict.py --pipeline
+
+# Batch (reads a 'text' column from a CSV)
+python predict.py --pipeline --batch dataset/real_sms.csv
+```
+
+The subcategory model is trained separately — if `models/saved/fintech_model.keras`
+doesn't exist yet, run `python train_fintech.py` first. The original single-model
+`python predict.py` (no `--pipeline` flag) still works exactly as before.
+
+New files added for this integration:
+- `transaction_extractor.py` — regex-based entity extraction (amount, date,
+  account, bank, beneficiary, etc.), reused unchanged from the LSTM+CNN project.
+- `spend_classifier.py` — rule + ML hybrid Transaction Subcategory classifier,
+  reused from the LSTM+CNN project but now backed by this project's own
+  CNN+GRU `fintech_model.keras` instead of the CNN+LSTM one.
+- `FinanceTrackerPipeline` class (in `predict.py`) — orchestrates the full
+  binary → subcategory workflow described above.
+
 ## Model Architecture
 
 The hybrid CNN-LSTM architecture combines convolutional and recurrent layers:
