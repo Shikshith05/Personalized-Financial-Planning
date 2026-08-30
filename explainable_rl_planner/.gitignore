@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+
+# Trained model weights
+savings_policy_model.pt
+*.pt
+
+# Credentials — never commit these
+token.pkl
+credentials.json
+.env
+*.key
