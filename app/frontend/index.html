@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Financial Planning</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --bg-elev: #171b22;
+        --panel: #1d232b;
+        --panel-alt: #121821;
+        --text: #edf3ff;
+        --muted: #9aa9bd;
+        --line: rgba(255,255,255,0.08);
+        --accent: #40d9c3;
+        --accent-soft: rgba(64, 217, 195, 0.12);
+        --warning: #ffb454;
+        --shadow: 0 18px 54px rgba(12, 15, 20, 0.5);
+      }
+
+      * { box-sizing: border-box; }
+
+      html { scroll-behavior: smooth; }
+
+      body {
+        margin: 0;
+        font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.5;
+      }
+
+      .page {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 48px 20px 72px;
+      }
+
+      .hero {
+        margin-bottom: 26px;
+      }
+
+      .eyebrow {
+        color: var(--accent);
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        font-weight: 700;
+      }
+
+      h1 {
+        margin: 12px 0 8px;
+        font-size: clamp(2.2rem, 5vw, 4rem);
+        line-height: 1.05;
+        letter-spacing: -0.06em;
+      }
+
+      .subtitle {
+        max-width: 620px;
+        color: var(--muted);
+        margin: 0;
+      }
+
+      section {
+        margin-top: 26px;
+        display: none;
+      }
+
+      section.visible {
+        display: block;
+        animation: fadeIn 0.35s ease;
+      }
+
+      @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      .card {
+        background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        box-shadow: var(--shadow);
+        padding: 24px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 20px;
+      }
+
+      textarea, input {
+        width: 100%;
+        min-height: 52px;
+        resize: vertical;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: var(--panel-alt);
+        color: var(--text);
+        font: inherit;
+        padding: 14px 16px;
+      }
+
+      textarea {
+        min-height: 180px;
+      }
+
+      textarea::placeholder, input::placeholder {
+        color: var(--muted);
+      }
+
+      .row {
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+      }
+
+      button {
+        border: 1px solid transparent;
+        border-radius: 10px;
+        background: var(--accent);
+        color: #041915;
+        font: inherit;
+        font-weight: 700;
+        padding: 12px 18px;
+        cursor: pointer;
+        transition: transform 0.15s ease, opacity 0.15s ease;
+      }
+
+      button:hover { transform: translateY(-1px); }
+      button:active { transform: translateY(0); }
+      button.secondary {
+        background: transparent;
+        border-color: var(--line);
+        color: var(--text);
+      }
+
+      .small-muted {
+        color: var(--muted);
+        font-size: 0.87rem;
+      }
+
+      .loading {
+        display: none;
+        align-items: center;
+        gap: 12px;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      .loading.visible { display: inline-flex; }
+
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(255,255,255,0.12);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.75s linear infinite;
+      }
+
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      .result-grid {
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      }
+
+      .field {
+        background: rgba(255,255,255,0.02);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 14px 16px;
+      }
+
+      .field .label {
+        color: var(--muted);
+        font-size: 0.76rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 6px;
+      }
+
+      .field .value {
+        font-size: 1rem;
+        font-weight: 600;
+      }
+
+      .status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
+        padding: 8px 12px;
+        font-size: 0.82rem;
+        font-weight: 700;
+      }
+
+      .chart-wrap {
+        height: 300px;
+      }
+
+      .summary {
+        color: var(--muted);
+        margin-top: 14px;
+      }
+
+      .recommendation-amount {
+        font-size: clamp(2.3rem, 5vw, 4rem);
+        letter-spacing: -0.06em;
+        font-weight: 800;
+        margin: 10px 0;
+      }
+
+      .expandable {
+        margin-top: 20px;
+      }
+
+      .toggle {
+        width: 100%;
+        text-align: left;
+        background: rgba(255,255,255,0.02);
+        border: 1px solid var(--line);
+        color: var(--text);
+        font-weight: 600;
+        padding: 14px 16px;
+      }
+
+      .toggle-panel {
+        display: none;
+        margin-top: 12px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: rgba(255,255,255,0.02);
+        padding: 16px;
+      }
+
+      .toggle-panel.visible { display: block; }
+
+      ul {
+        margin: 0;
+        padding-left: 20px;
+        color: var(--muted);
+      }
+
+      .error {
+        color: #ff826a;
+      }
+
+      @media (max-width: 640px) {
+        .page { padding-top: 28px; }
+        .card { padding: 18px; }
+        .row { align-items: flex-start; }
+        .chart-wrap { height: 220px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="hero">
+        <div class="eyebrow">Unified planning demo</div>
+        <h1>Smarter spending, savings, and forecasts</h1>
+        <p class="subtitle">Paste an SMS, turn it into a transaction, model the next expense trend, and get an explainable monthly saving recommendation.</p>
+      </div>
+
+      <section id="step1" class="visible">
+        <div class="card stack">
+          <div>
+            <div class="eyebrow" style="margin-bottom: 8px;">Step 1</div>
+            <h2>Paste raw SMS</h2>
+          </div>
+          <textarea id="smsInput" placeholder="Example: HDFC Bank Alert: Your A/c XX2428 debited by INR 1,287.00 on 17-06-26 for Zomato. Avl bal Rs. 23,145.67"></textarea>
+          <div class="row">
+            <div class="small-muted">Optional known upcoming expenses</div>
+            <div class="loading" id="loadingStep1"><span class="spinner"></span>Analyzing SMS…</div>
+          </div>
+          <textarea id="calendarInput" placeholder="Optional upcoming known expenses or calendar notes: Birthday on 12 Aug, EMI due on 18 Aug, School fee due in 2 weeks"></textarea>
+
+          <div class="card" style="padding: 18px; border-style: dashed; background: rgba(255,255,255,0.01);">
+            <div class="eyebrow" style="margin-bottom: 10px;">Manual expense entries</div>
+            <div class="row" style="align-items: stretch;">
+              <div style="flex: 1 1 150px; min-width: 140px;">
+                <input id="manualEntryAmount" type="number" min="0" step="0.01" placeholder="Amount (₹)" />
+              </div>
+              <div style="flex: 1 1 180px; min-width: 180px;">
+                <input id="manualEntryCategory" type="text" placeholder="Category" />
+              </div>
+              <button id="addManualExpenseBtn" class="secondary" type="button">Add expense</button>
+            </div>
+            <div id="manualExpenseList" class="small-muted" style="margin-top: 16px; min-height: 20px;">No manual expenses yet. Add at least 2 entries to unlock the forecast.</div>
+          </div>
+
+          <div class="row">
+            <button id="analyzeBtn">Analyze</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="step2">
+        <div class="card stack">
+          <div class="row">
+            <div>
+              <div class="eyebrow" style="margin-bottom: 8px;">Step 2</div>
+              <h2>Classification & extraction</h2>
+            </div>
+            <div id="classificationStatus" class="status-badge" style="display:none;">Transaction detected</div>
+          </div>
+          <div id="transactionResult" class="result-grid"></div>
+        </div>
+      </section>
+
+      <section id="step3">
+        <div class="card stack">
+          <div>
+            <div class="eyebrow" style="margin-bottom: 8px;">Step 3</div>
+            <h2>Forecast</h2>
+          </div>
+          <div class="loading" id="loadingStep3"><span class="spinner"></span>Forecasting next month…</div>
+          <canvas id="forecastChart" class="chart-wrap"></canvas>
+          <p id="forecastSummary" class="summary"></p>
+        </div>
+      </section>
+
+      <section id="step4">
+        <div class="card stack">
+          <div>
+            <div class="eyebrow" style="margin-bottom: 8px;">Step 4</div>
+            <h2>Recommended savings</h2>
+          </div>
+          <div class="loading" id="loadingStep4"><span class="spinner"></span>Calculating recommendation…</div>
+          <div id="recommendationResult"></div>
+          <div class="expandable">
+            <button class="toggle" id="toggleExplanation">Explain this recommendation</button>
+            <div id="explanationPanel" class="toggle-panel"></div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const state = {
+        chart: null,
+        manualExpenses: [],
+      };
+
+      const step1 = document.getElementById('step1');
+      const step2 = document.getElementById('step2');
+      const step3 = document.getElementById('step3');
+      const step4 = document.getElementById('step4');
+
+      function revealStep(id) {
+        document.querySelectorAll('section').forEach((section) => section.classList.remove('visible'));
+        const target = document.getElementById(id);
+        if (target) target.classList.add('visible');
+      }
+
+      function showLoading(id, visible) {
+        const el = document.getElementById(id);
+        el.classList.toggle('visible', visible);
+      }
+
+      function formatMoney(value) {
+        if (value === null || value === undefined || value === '') return '—';
+        return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(Number(value));
+      }
+
+      function formatPercent(value) {
+        if (value === null || value === undefined || value === '') return '—';
+        return `${Number(value).toFixed(1)}%`;
+      }
+
+      function renderManualExpenses() {
+        const list = document.getElementById('manualExpenseList');
+        if (!state.manualExpenses.length) {
+          list.innerHTML = 'No manual expenses yet. Add at least 2 entries to unlock the forecast.';
+          return;
+        }
+
+        list.innerHTML = state.manualExpenses.map((entry, idx) => `
+          <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-top: 8px;">
+            <span>${entry.category || 'Uncategorized'} · ${formatMoney(entry.amount || 0)}</span>
+            <button class="secondary" type="button" data-index="${idx}" style="padding: 8px 12px; font-size: 0.8rem;">Remove</button>
+          </div>
+        `).join('');
+
+        list.querySelectorAll('button[data-index]').forEach((button) => {
+          button.addEventListener('click', () => {
+            const idx = Number(button.getAttribute('data-index'));
+            state.manualExpenses.splice(idx, 1);
+            renderManualExpenses();
+          });
+        });
+      }
+
+      function renderClassification(result) {
+        const holder = document.getElementById('transactionResult');
+        holder.innerHTML = '';
+
+        if (!result || result.is_transaction === false) {
+          holder.innerHTML = '<div class="field"><div class="label">Status</div><div class="value">Not a transaction SMS</div></div>';
+          document.getElementById('classificationStatus').style.display = 'inline-flex';
+          document.getElementById('classificationStatus').textContent = 'Non-transaction';
+          return;
+        }
+
+        const entities = result.entities || {};
+        const fields = [
+          ['Category', result.spend_category || 'Transaction'],
+          ['Amount', formatMoney(entities.amount)],
+          ['Merchant', entities.beneficiary || entities.bank || 'Unknown'],
+          ['Type', entities.transaction_type || 'Unknown'],
+          ['Date', entities.date || 'Unknown'],
+          ['Account', entities.account || 'Unknown'],
+          ['Confidence', formatPercent(result.sms_confidence)],
+        ];
+
+        fields.forEach(([label, value]) => {
+          const field = document.createElement('div');
+          field.className = 'field';
+          field.innerHTML = `<div class="label">${label}</div><div class="value">${value}</div>`;
+          holder.appendChild(field);
+        });
+
+        document.getElementById('classificationStatus').style.display = 'inline-flex';
+        document.getElementById('classificationStatus').textContent = 'Transaction detected';
+      }
+
+      function renderForecastChart(data) {
+        const labels = (data.forecast || []).map((point) => point.label || point.month || 'Month');
+        const values = (data.forecast || []).map((point) => Number(point.value || 0));
+        const ctx = document.getElementById('forecastChart').getContext('2d');
+
+        if (state.chart) state.chart.destroy();
+
+        state.chart = new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [{
+              label: 'Predicted expense',
+              data: values,
+              backgroundColor: 'rgba(64, 217, 195, 0.65)',
+              borderColor: 'rgba(64, 217, 195, 1)',
+              borderWidth: 1,
+              borderRadius: 8,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              y: {
+                beginAtZero: false,
+                ticks: {
+                  color: '#9aa9bd',
+                  callback: (value) => '₹' + value.toLocaleString('en-IN'),
+                },
+                grid: { color: 'rgba(255,255,255,0.08)' },
+              },
+              x: {
+                ticks: { color: '#9aa9bd' },
+                grid: { display: false },
+              },
+            },
+          },
+        });
+      }
+
+      function renderRecommendation(data) {
+        const container = document.getElementById('recommendationResult');
+        if (!data || data.status !== 'ok') {
+          const message = (data && data.message) ? data.message : 'Unable to calculate a recommendation.';
+          container.innerHTML = '<div class="field"><div class="label">Recommendation</div><div class="value">' + message + '</div></div>';
+          return;
+        }
+
+        const recommended = Number(data.recommended_amount || 0);
+        const explanation = data.explanation || {};
+        const components = explanation.blend_breakdown || explanation.breakdown || [];
+        const componentHtml = components.map((item) => `
+          <li><strong>${item.name || 'Component'}</strong> · ${item.weight ? `${(item.weight * 100).toFixed(0)}%` : '—'} · ${formatMoney(item.contribution || 0)}</li>
+        `).join('');
+
+        container.innerHTML = `
+          <div class="field">
+            <div class="label">Recommended monthly savings</div>
+            <div class="recommendation-amount">${formatMoney(recommended)}</div>
+            <div class="small-muted">Available after expenses: ${formatMoney(data.available_amount || 0)}</div>
+          </div>
+        `;
+
+        const panel = document.getElementById('explanationPanel');
+        panel.innerHTML = `
+          <p>${data.explanation_text || 'Recommendation explanation unavailable.'}</p>
+          <h4>Blend breakdown</h4>
+          <ul>${componentHtml || '<li>No component data available.</li>'}</ul>
+          <h4 style="margin-top: 18px;">Feature attribution</h4>
+          <ul>${(explanation.feature_attribution || []).map((item) => `<li>${item.feature}: ${item.influence > 0 ? 'positive' : 'negative'} impact (${Number(item.influence || 0).toFixed(3)})</li>`).join('') || '<li>No feature attribution available.</li>'}</ul>
+          <h4 style="margin-top: 18px;">Counterfactual</h4>
+          <p>${JSON.stringify(explanation.counterfactual || 'No counterfactual available.')}</p>
+        `;
+      }
+
+      document.getElementById('addManualExpenseBtn').addEventListener('click', () => {
+        const amountInput = document.getElementById('manualEntryAmount');
+        const categoryInput = document.getElementById('manualEntryCategory');
+        const amount = Number(amountInput.value);
+        const category = (categoryInput.value || 'Miscellaneous').trim() || 'Miscellaneous';
+
+        if (!Number.isFinite(amount) || amount <= 0) {
+          alert('Please add a valid positive expense amount.');
+          return;
+        }
+
+        state.manualExpenses.push({ amount, category });
+        amountInput.value = '';
+        categoryInput.value = '';
+        renderManualExpenses();
+      });
+
+      document.getElementById('analyzeBtn').addEventListener('click', async () => {
+        const smsText = document.getElementById('smsInput').value.trim();
+        const knownExpenses = document.getElementById('calendarInput').value.trim();
+
+        if (!smsText) {
+          alert('Please paste an SMS text to analyze.');
+          return;
+        }
+
+        if (state.manualExpenses.length < 2) {
+          alert('Add at least 2 manual expense entries to unlock the forecast and recommendation flow.');
+          return;
+        }
+
+        revealStep('step2');
+        showLoading('loadingStep1', true);
+        document.getElementById('transactionResult').innerHTML = '';
+
+        try {
+          const response = await fetch('/pipeline', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              sms_text: smsText,
+              upcoming_known_expenses: knownExpenses,
+              manual_expenses: state.manualExpenses,
+            }),
+          });
+          const payload = await response.json();
+
+          if (!payload || !payload.sms_result) {
+            throw new Error('Pipeline did not return a result.');
+          }
+
+          renderClassification(payload.sms_result);
+          revealStep('step2');
+          showLoading('loadingStep1', false);
+
+          if (payload.forecast && payload.forecast.status === 'ok') {
+            renderForecastChart(payload.forecast);
+            document.getElementById('forecastSummary').textContent = payload.forecast.summary || 'Forecast summary unavailable.';
+            revealStep('step3');
+            showLoading('loadingStep3', false);
+          } else {
+            document.getElementById('forecastSummary').textContent = payload.forecast && payload.forecast.message ? payload.forecast.message : 'No forecast available for this transaction.';
+            revealStep('step3');
+            showLoading('loadingStep3', false);
+          }
+
+          if (payload.recommendation) {
+            renderRecommendation(payload.recommendation);
+            revealStep('step4');
+            showLoading('loadingStep4', false);
+          } else {
+            document.getElementById('recommendationResult').innerHTML = '<div class="field"><div class="label">Recommendation</div><div class="value">No recommendation generated.</div></div>';
+            revealStep('step4');
+            showLoading('loadingStep4', false);
+          }
+        } catch (error) {
+          showLoading('loadingStep1', false);
+          document.getElementById('transactionResult').innerHTML = '<div class="field error"><div class="label">Error</div><div class="value">' + error.message + '</div></div>';
+          revealStep('step2');
+        }
+      });
+
+      document.getElementById('toggleExplanation').addEventListener('click', function () {
+        const panel = document.getElementById('explanationPanel');
+        panel.classList.toggle('visible');
+      });
+
+      renderManualExpenses();
+      showLoading('loadingStep1', false);
+      showLoading('loadingStep3', false);
+      showLoading('loadingStep4', false);
+    </script>
+  </body>
+</html>

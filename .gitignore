@@ -1,0 +1,28 @@
+# Python environment
+.venv/
+venv/
+env/
+app_venv/
+torch_gpu/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# ML/model artifacts
+*.keras
+*.pt
+*.pkl
+
+# auth artifacts
+credentials.json
+token.json
+
+# generated outputs
+*.log
+*.xlsx
+logs/
+
+# keep project source, requirements, and docs tracked
+!requirements.txt
+!README*
