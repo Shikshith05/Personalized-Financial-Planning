@@ -214,7 +214,7 @@ class SavingsRecommendationService:
                 'message': 'The RL planner dependencies were not imported successfully.',
             }
 
-        monthly_income = float(forecast.get('monthly_income') or 50000.0)
+        monthly_income = float(forecast.get('monthly_income') if forecast.get('monthly_income') is not None else 50000.0)
         monthly_expense = float(forecast.get('total_predicted_expense') or 22000.0)
         available_amount = max(monthly_income - monthly_expense, 0.0)
 

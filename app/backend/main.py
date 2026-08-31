@@ -78,7 +78,7 @@ async def pipeline(payload: dict):
                 'beneficiary': (sms_result.get('entities') or {}).get('beneficiary'),
                 'bank': (sms_result.get('entities') or {}).get('bank'),
                 'category': sms_result.get('spend_category'),
-                'monthly_income': body.get('monthly_income', 50000),
+                'monthly_income': body.get('monthly_income') if body.get('monthly_income') is not None else 50000,
                 'merchant': (sms_result.get('entities') or {}).get('beneficiary') or sms_result.get('spend_category'),
                 'manual_expenses': manual_expenses,
             }

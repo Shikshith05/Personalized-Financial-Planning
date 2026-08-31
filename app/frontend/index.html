@@ -171,6 +171,35 @@
         grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       }
 
+      .progress {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+        margin: 18px 0 26px;
+      }
+
+      .progress-step {
+        background: rgba(255,255,255,0.02);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        color: var(--muted);
+        font-size: 0.8rem;
+        padding: 10px 12px;
+        text-align: center;
+        font-weight: 700;
+      }
+
+      .progress-step.active {
+        background: var(--accent-soft);
+        border-color: rgba(64, 217, 195, 0.4);
+        color: var(--accent);
+      }
+
+      .progress-step.done {
+        color: var(--text);
+        border-color: rgba(64, 217, 195, 0.25);
+      }
+
       .field {
         background: rgba(255,255,255,0.02);
         border: 1px solid var(--line);
@@ -254,6 +283,12 @@
         color: #ff826a;
       }
 
+      .back-button {
+        background: transparent;
+        border: 1px solid var(--line);
+        color: var(--text);
+      }
+
       @media (max-width: 640px) {
         .page { padding-top: 28px; }
         .card { padding: 18px; }
@@ -268,6 +303,18 @@
         <div class="eyebrow">Unified planning demo</div>
         <h1>Smarter spending, savings, and forecasts</h1>
         <p class="subtitle">Paste an SMS, turn it into a transaction, model the next expense trend, and get an explainable monthly saving recommendation.</p>
+      </div>
+
+      <div class="progress" aria-label="Plan progress">
+        <div class="progress-step active" data-step="1">Step 1</div>
+        <div class="progress-step" data-step="2">Step 2</div>
+        <div class="progress-step" data-step="3">Step 3</div>
+        <div class="progress-step" data-step="4">Step 4</div>
+      </div>
+
+      <div class="card" style="margin-bottom: 24px;">
+        <div class="eyebrow" style="margin-bottom: 10px;">Monthly income</div>
+        <input id="monthlyIncomeInput" type="number" min="0" step="1000" value="50000" />
       </div>
 
       <section id="step1" class="visible">
@@ -313,6 +360,9 @@
             <div id="classificationStatus" class="status-badge" style="display:none;">Transaction detected</div>
           </div>
           <div id="transactionResult" class="result-grid"></div>
+          <div class="row" style="justify-content: flex-start; margin-top: 10px;">
+            <button class="back-button" type="button" data-back="1">Back / Edit inputs</button>
+          </div>
         </div>
       </section>
 
@@ -325,6 +375,9 @@
           <div class="loading" id="loadingStep3"><span class="spinner"></span>Forecasting next month…</div>
           <canvas id="forecastChart" class="chart-wrap"></canvas>
           <p id="forecastSummary" class="summary"></p>
+          <div class="row" style="justify-content: flex-start; margin-top: 10px;">
+            <button class="back-button" type="button" data-back="1">Back / Edit inputs</button>
+          </div>
         </div>
       </section>
 
@@ -336,6 +389,9 @@
           </div>
           <div class="loading" id="loadingStep4"><span class="spinner"></span>Calculating recommendation…</div>
           <div id="recommendationResult"></div>
+          <div class="row" style="justify-content: flex-start; margin-top: 10px;">
+            <button class="back-button" type="button" data-back="1">Back / Edit inputs</button>
+          </div>
           <div class="expandable">
             <button class="toggle" id="toggleExplanation">Explain this recommendation</button>
             <div id="explanationPanel" class="toggle-panel"></div>
@@ -359,6 +415,13 @@
         document.querySelectorAll('section').forEach((section) => section.classList.remove('visible'));
         const target = document.getElementById(id);
         if (target) target.classList.add('visible');
+
+        const stepNumber = Number(id.replace('step', '')) || 1;
+        document.querySelectorAll('.progress-step').forEach((stepEl) => {
+          const stepValue = Number(stepEl.dataset.step);
+          stepEl.classList.toggle('active', stepValue === stepNumber);
+          stepEl.classList.toggle('done', stepValue < stepNumber);
+        });
       }
 
       function showLoading(id, visible) {
@@ -526,9 +589,16 @@
         renderManualExpenses();
       });
 
+      document.querySelectorAll('.back-button').forEach((button) => {
+        button.addEventListener('click', () => {
+          revealStep('step1');
+        });
+      });
+
       document.getElementById('analyzeBtn').addEventListener('click', async () => {
         const smsText = document.getElementById('smsInput').value.trim();
         const knownExpenses = document.getElementById('calendarInput').value.trim();
+        const monthlyIncome = Number(document.getElementById('monthlyIncomeInput').value || 0);
 
         if (!smsText) {
           alert('Please paste an SMS text to analyze.');
@@ -550,6 +620,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               sms_text: smsText,
+              monthly_income: Number.isFinite(monthlyIncome) && monthlyIncome > 0 ? monthlyIncome : 50000,
               upcoming_known_expenses: knownExpenses,
               manual_expenses: state.manualExpenses,
             }),
@@ -596,7 +667,15 @@
         panel.classList.toggle('visible');
       });
 
+      document.getElementById('monthlyIncomeInput').addEventListener('input', () => {
+        const value = Number(document.getElementById('monthlyIncomeInput').value || 0);
+        if (Number.isFinite(value) && value > 0) {
+          document.getElementById('monthlyIncomeInput').value = String(value);
+        }
+      });
+
       renderManualExpenses();
+      revealStep('step1');
       showLoading('loadingStep1', false);
       showLoading('loadingStep3', false);
       showLoading('loadingStep4', false);
