@@ -1,16 +1,31 @@
-# Consolidated project requirements
-# Matches the existing project modules where available, with the app stack added.
-fastapi==0.115.0
-uvicorn==0.30.6
-tensorflow==2.17.0
+# Versions the demo app (app/) was run and tested with, on Python 3.11.
+# The saved SMS preprocessors were pickled with NumPy 2.x, so NumPy 1.x cannot load them.
+
+# web app
+fastapi==0.142.2
+uvicorn==0.38.0
+
+# sms_parsing
+tensorflow==2.21.0
 keras==3.14.1
-numpy==1.26.4
-pandas==2.2.3
-scikit-learn==1.5.2
-matplotlib==3.9.2
-seaborn==0.13.2
-joblib==1.4.2
-statsmodels==0.14.2
+
+# expense_forecasting
+numpy==2.3.4
+pandas==2.3.3
+scikit-learn==1.7.2
+statsmodels==0.14.6
+joblib==1.5.2
 openpyxl==3.1.5
 python-dateutil==2.9.0.post0
-torch==2.4.1
+
+# explainable_rl_planner
+torch==2.12.0
+
+# training scripts / notebooks in the module folders
+matplotlib
+seaborn
+tqdm
+
+# tests
+pytest
+httpx

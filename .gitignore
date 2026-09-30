@@ -26,3 +26,10 @@ logs/
 # keep project source, requirements, and docs tracked
 !requirements.txt
 !README*
+
+# app: locally built model artifacts and caches
+app/artifacts/
+
+# local tooling
+.claude/
+.pytest_cache/
