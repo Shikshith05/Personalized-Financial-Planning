@@ -1,100 +1,283 @@
-from pathlib import Path
+"""FastAPI app: serves the frontend and exposes the three pipeline stages.
+
+    python -m app.backend.main        # http://127.0.0.1:8000
+"""
+
+import os
+import sys
+import threading
+from contextlib import asynccontextmanager
+from typing import Any, Dict, List, Optional
+
+os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '2')
+sys.dont_write_bytecode = True  # never write __pycache__ into the research modules
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
-from .pipeline import run_forecast, run_recommendation, run_sms_analysis
+from . import forecast_core
+from .config import FRONTEND_DIR, PRIORITIES, SAMPLE_SMS, SPEND_TO_EXPENSE_CATEGORY
+from .forecast_service import ForecastError
+from .planner_service import PlannerError
+from .sms_service import SMSError, split_messages
 
-ROOT = Path(__file__).resolve().parents[1]
-FRONTEND_DIR = ROOT / 'frontend'
+USER_ERRORS = (SMSError, ForecastError, PlannerError)
 
-app = FastAPI(title='Financial Planning Demo')
 
+class Services:
+    """Lazily loaded model services. Loading happens on a background thread
+    so the page is reachable while TensorFlow and the forecast model warm up."""
+
+    def __init__(self):
+        self.sms = None
+        self.forecast = None
+        self.planner = None
+        self.load_errors: Dict[str, str] = {}
+        self._started = False
+        self._lock = threading.Lock()
+
+    def start(self):
+        with self._lock:
+            if self._started:
+                return
+            self._started = True
+        threading.Thread(target=self._load, name='model-loader', daemon=True).start()
+
+    def _load(self):
+        # The planner goes first: it must import its own `train` module
+        # before sms_parsing puts a different one on the path.
+        for name, factory in (('planner', self._make_planner), ('forecast', self._make_forecast),
+                              ('sms', self._make_sms)):
+            try:
+                setattr(self, name, factory())
+            except Exception as exc:
+                self.load_errors[name] = f'{type(exc).__name__}: {exc}'
+
+    @staticmethod
+    def _make_planner():
+        from .planner_service import SavingsPlannerService
+        return SavingsPlannerService()
+
+    @staticmethod
+    def _make_forecast():
+        from .forecast_service import ForecastService
+        return ForecastService()
+
+    @staticmethod
+    def _make_sms():
+        from .sms_service import SMSService
+        return SMSService()
+
+    def status(self) -> Dict[str, Any]:
+        modules = {}
+        for name in ('sms', 'forecast', 'planner'):
+            service = getattr(self, name)
+            if service is not None:
+                info = service.status()
+                info['state'] = 'ready' if info['ready'] else 'unavailable'
+            elif name in self.load_errors:
+                info = {'ready': False, 'state': 'unavailable', 'message': self.load_errors[name]}
+            else:
+                info = {'ready': False, 'state': 'loading', 'message': 'Loading model ...'}
+            modules[name] = info
+        return {
+            'modules': modules,
+            'loading': any(info['state'] == 'loading' for info in modules.values()),
+        }
+
+    def require(self, name: str):
+        service = getattr(self, name)
+        if service is None:
+            message = self.load_errors.get(name) or 'This model is still loading. Try again in a few seconds.'
+            raise ServiceUnavailable(message)
+        return service
+
+
+class ServiceUnavailable(RuntimeError):
+    pass
+
+
+services = Services()
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    services.start()
+    yield
+
+
+app = FastAPI(title='Personalized Financial Planning', lifespan=lifespan)
 app.mount('/static', StaticFiles(directory=str(FRONTEND_DIR)), name='static')
 
 
+@app.exception_handler(ServiceUnavailable)
+async def unavailable_handler(_: Request, exc: ServiceUnavailable):
+    return JSONResponse(status_code=503, content={'error': str(exc)})
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_handler(_: Request, exc: RequestValidationError):
+    first = exc.errors()[0] if exc.errors() else {}
+    field = '.'.join(str(part) for part in first.get('loc', []) if part != 'body')
+    return JSONResponse(status_code=400, content={'error': f"Invalid request: {field} {first.get('msg', '')}".strip()})
+
+
+async def user_error_handler(_: Request, exc: Exception):
+    return JSONResponse(status_code=400, content={'error': str(exc)})
+
+
+for _error_type in USER_ERRORS:
+    app.add_exception_handler(_error_type, user_error_handler)
+
+
 @app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    return JSONResponse(
-        status_code=500,
-        content={'error': f'{type(exc).__name__}: {exc}'},
+async def unexpected_handler(_: Request, exc: Exception):
+    return JSONResponse(status_code=500, content={'error': f'{type(exc).__name__}: {exc}'})
+
+
+# -- request bodies ---------------------------------------------------------
+
+class SMSRequest(BaseModel):
+    text: str = ''
+    messages: Optional[List[str]] = None
+
+
+class LedgerEntry(BaseModel):
+    category: str
+    amount: float
+
+
+class EventEntry(BaseModel):
+    event_type: str
+    estimated_cost: float
+    importance: Optional[str] = None
+    planning_months: Optional[float] = None
+
+
+class ForecastRequest(BaseModel):
+    user_id: str
+    monthly_income: Optional[float] = None
+    ledger: List[LedgerEntry] = Field(default_factory=list)
+    events: List[EventEntry] = Field(default_factory=list)
+
+
+class GoalEntry(BaseModel):
+    name: str = ''
+    target_amount: float
+    current_savings: float = 0.0
+    deadline_months: int
+    priority: str = 'medium'
+
+
+class PlanRequest(BaseModel):
+    monthly_income: float
+    monthly_expense: float
+    goals: List[GoalEntry]
+    actual_savings: List[float] = Field(default_factory=list)
+
+
+class AllocationEntry(BaseModel):
+    goal: str
+    amount: float
+
+
+class WhatIfRequest(BaseModel):
+    available_amount: float
+    recommended_savings: float
+    alternative_savings: float
+    allocations: List[AllocationEntry]
+
+
+# -- routes -----------------------------------------------------------------
+
+@app.get('/')
+def index():
+    return FileResponse(FRONTEND_DIR / 'index.html', headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/api/status')
+def status():
+    return services.status()
+
+
+@app.get('/api/meta')
+def meta():
+    forecast = services.require('forecast')
+    return {
+        'profiles': forecast.profiles(),
+        'categories': forecast.categories,
+        'event_types': [
+            {
+                'event_type': event_type,
+                'categories': categories,
+                'importance': forecast_core.infer_event_importance(event_type),
+            }
+            for event_type, categories in sorted(forecast_core.EVENT_CATEGORY_MAP.items())
+        ],
+        'sample_sms': SAMPLE_SMS,
+        'priorities': PRIORITIES,
+        'spend_to_expense_category': SPEND_TO_EXPENSE_CATEGORY,
+    }
+
+
+@app.post('/api/sms/analyze')
+def sms_analyze(body: SMSRequest):
+    messages = body.messages if body.messages is not None else split_messages(body.text)
+    results = services.require('sms').analyze(messages)
+    return {
+        'results': results,
+        'summary': {
+            'messages': len(results),
+            'transactions': sum(1 for item in results if item['is_transaction']),
+            'expenses': sum(1 for item in results if item['counts_as_expense']),
+            'expense_total': round(sum(item['amount'] for item in results if item['counts_as_expense']), 2),
+        },
+    }
+
+
+@app.post('/api/forecast')
+def forecast(body: ForecastRequest):
+    return services.require('forecast').forecast(
+        user_id=body.user_id,
+        monthly_income=body.monthly_income,
+        ledger=[entry.model_dump() for entry in body.ledger],
+        events=[entry.model_dump() for entry in body.events],
     )
 
 
-@app.get('/')
-async def index():
-    try:
-        return FileResponse(FRONTEND_DIR / 'index.html')
-    except Exception as exc:
-        return JSONResponse(status_code=500, content={'error': str(exc)})
+@app.post('/api/plan')
+def plan(body: PlanRequest):
+    return services.require('planner').plan(
+        monthly_income=body.monthly_income,
+        monthly_expense=body.monthly_expense,
+        goals=[goal.model_dump() for goal in body.goals],
+        actual_savings=body.actual_savings,
+    )
 
 
-@app.post('/sms/analyze')
-async def sms_analyze(payload: dict):
-    try:
-        body = payload or {}
-        return await run_sms_analysis(body.get('sms_text', ''))
-    except Exception as exc:
-        return JSONResponse(status_code=400, content={'error': f'SMS analysis failed: {exc}'})
+@app.post('/api/plan/what-if')
+def plan_what_if(body: WhatIfRequest):
+    return services.require('planner').what_if(
+        available_amount=body.available_amount,
+        recommended_savings=body.recommended_savings,
+        allocations=[entry.model_dump() for entry in body.allocations],
+        alternative_savings=body.alternative_savings,
+    )
 
 
-@app.post('/forecast/analyze')
-async def forecast_analyze(payload: dict):
-    try:
-        body = payload or {}
-        transaction = body.get('transaction') or body
-        upcoming_known_expenses = body.get('upcoming_known_expenses', '')
-        return await run_forecast(transaction, upcoming_known_expenses)
-    except Exception as exc:
-        return JSONResponse(status_code=400, content={'error': f'Forecast failed: {exc}'})
+def run():
+    import uvicorn
 
-
-@app.post('/rl/recommend')
-async def rl_recommend(payload: dict):
-    try:
-        body = payload or {}
-        forecast = body.get('forecast') or body
-        return await run_recommendation(forecast)
-    except Exception as exc:
-        return JSONResponse(status_code=400, content={'error': f'Recommendation failed: {exc}'})
-
-
-@app.post('/pipeline')
-async def pipeline(payload: dict):
-    try:
-        body = payload or {}
-        sms_text = body.get('sms_text', '')
-        upcoming_known_expenses = body.get('upcoming_known_expenses', '')
-        manual_expenses = body.get('manual_expenses', [])
-
-        sms_result = await run_sms_analysis(sms_text)
-        forecast_result = {'status': 'skipped', 'message': 'No transaction found. Forecast skipped.'}
-        recommendation = {'status': 'skipped', 'message': 'No transaction found. Recommendation skipped.'}
-
-        if sms_result.get('is_transaction'):
-            transaction_payload = {
-                'amount': (sms_result.get('entities') or {}).get('amount'),
-                'beneficiary': (sms_result.get('entities') or {}).get('beneficiary'),
-                'bank': (sms_result.get('entities') or {}).get('bank'),
-                'category': sms_result.get('spend_category'),
-                'monthly_income': body.get('monthly_income') if body.get('monthly_income') is not None else 50000,
-                'merchant': (sms_result.get('entities') or {}).get('beneficiary') or sms_result.get('spend_category'),
-                'manual_expenses': manual_expenses,
-            }
-            forecast_result = await run_forecast(transaction_payload, upcoming_known_expenses)
-            if forecast_result.get('status') == 'ok':
-                recommendation = await run_recommendation(forecast_result)
-
-        return {
-            'sms_result': sms_result,
-            'forecast': forecast_result,
-            'recommendation': recommendation,
-        }
-    except Exception as exc:
-        return JSONResponse(status_code=500, content={'error': f'Pipeline failed: {exc}'})
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    host = os.environ.get('HOST', '127.0.0.1')
+    port = int(os.environ.get('PORT', '8000'))
+    print(f'Personalized Financial Planning -> http://{host}:{port}  (models load in the background)')
+    uvicorn.run(app, host=host, port=port)
 
 
 if __name__ == '__main__':
-    import uvicorn
-    uvicorn.run('app.backend.main:app', host='0.0.0.0', port=8000, reload=True)
+    run()
