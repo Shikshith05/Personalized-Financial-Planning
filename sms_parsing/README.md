@@ -1,528 +1,311 @@
-# SMS Classification using Hybrid CNN-LSTM Architecture
+# SMS Parsing & Classification using Hybrid CNN-GRU
 
-This project implements an on-device SMS classification system using a hybrid CNN-LSTM neural network architecture, inspired by the research paper **"On-Device Information Extraction from SMS using Hybrid Hierarchical Classification"**.
+On-device SMS understanding for the **Personalized Financial Planning** project. Messy bank/UPI SMS go in; categorised, structured transactions come out. The core model is a hybrid **CNN + GRU** network, adapted from the CNN-LSTM design in the paper **"On-Device Information Extraction from SMS using Hybrid Hierarchical Classification"** (Vatsal et al., arXiv:2002.02755), with the LSTM replaced by a GRU for fewer parameters and faster training.
 
-The system classifies Indian SMS messages into 8 balanced categories:
-- **Transaction** - Banking transactions, transfers
-- **OTP** - One-Time Passwords for authentication
-- **Promotion** - Marketing and promotional messages
-- **Bills** - Bill payments and invoices
-- **Shopping** - E-commerce and shopping notifications
-- **Food** - Food delivery and restaurant messages
-- **Travel** - Travel bookings and confirmations
-- **Personal** - Personal and miscellaneous messages
+## What this module does
+
+Two CNN-GRU models work together in a hierarchical pipeline:
+
+| Model | Task | Classes | Trained by |
+|---|---|---|---|
+| **Main SMS classifier** | Categorise any SMS | 8: Transaction, OTP, Promotion, Bills, Shopping, Food, Travel, Personal | `train.py` |
+| **Spend-category classifier** | Subcategorise Transaction SMS | 10: Food & Dining, Shopping, Travel, Utilities, Investment, Loan & EMI, Healthcare, Education, Entertainment, Personal Transfer | `train_fintech.py` |
+
+## Pipeline
+
+```
+SMS text
+  → regex preprocessing (preprocessing/preprocess.py)
+  → Binary decision: Transaction / Non-Transaction
+    (derived from the main CNN+GRU model, models/saved/best_model.keras)
+  → if Non-Transaction: return immediately
+  → if Transaction:
+      → regex entity extraction (transaction_extractor.py)
+         amount, date, account, bank, beneficiary, ...
+      → CNN+GRU spend-category classification
+         (models/saved/fintech_model.keras, with rule + ML hybrid in spend_classifier.py)
+```
 
 ## Project Structure
 
 ```
-sms_classifier/
+sms_parsing/
 │
 ├── dataset/
-│   └── indian_sms_dataset.csv          # Input dataset with SMS texts and labels
+│   ├── indian_sms_dataset.csv          # Main 8-class dataset
+│   ├── hard_realistic_augment.csv      # Harder, more realistic samples (merged in train.py)
+│   ├── spend_category_dataset.csv      # 10-class spend-category dataset
+│   ├── fintech_sms_dataset3.csv        # Additional fintech SMS data
+│   └── real_sms.csv                    # Real-world SMS for testing
 │
 ├── models/
-│   ├── model.py                         # CNN-LSTM architecture definition
-│   └── saved/                           # Directory for trained models
-│       ├── best_model.keras             # Best model (saved during training)
-│       ├── final_model.keras            # Final trained model
-│       └── history.pkl                  # Training history
+│   ├── model.py                        # CNN-GRU architecture definition
+│   └── saved/                          # Trained models
+│       ├── best_model.keras            # Main classifier (best val accuracy)
+│       ├── final_model.keras           # Main classifier (final epoch)
+│       ├── fintech_model.keras         # Spend-category model (best)
+│       ├── fintech_model_final.keras   # Spend-category model (final)
+│       └── history.pkl                 # Training history
 │
 ├── preprocessing/
-│   └── preprocess.py                    # Text preprocessing and tokenization
-│
-├── plots/                               # Directory for evaluation plots
-│   ├── confusion_matrix.png             # Confusion matrix heatmap
-│   └── training_history.png             # Training/validation curves
+│   └── preprocess.py                   # Text cleaning, tokenisation, padding
 │
 ├── preprocessors/
-│   └── preprocessor.pkl                 # Saved tokenizer and label encoder
+│   ├── preprocessor.pkl                # Tokenizer + label encoder (main model)
+│   └── fintech_preprocessor.pkl        # Tokenizer + label encoder (spend model)
 │
-├── train.py                             # Training script
-├── evaluate.py                          # Evaluation and metrics
-├── predict.py                           # Interactive prediction script
-├── utils.py                             # Utility functions
-├── requirements.txt                     # Python dependencies
-└── README.md                            # This file
+├── plots/                              # Evaluation plots and metrics
+│   ├── confusion_matrix.png
+│   ├── training_history.png
+│   ├── training_metrics.png
+│   └── epoch_metrics.csv
+│
+├── train.py                            # Train the main 8-class classifier
+├── train_fintech.py                    # Train the 10-class spend-category model
+├── evaluate.py                         # Evaluation and metrics
+├── predict.py                          # Interactive / batch prediction + full pipeline
+├── transaction_extractor.py            # Regex-based entity extraction
+├── spend_classifier.py                 # Rule + ML hybrid spend classifier
+├── benchmark_comparison.py             # CNN+LSTM vs CNN+GRU benchmark
+├── diagnose_gru.py                     # Gradient diagnostics for the GRU model
+├── utils.py                            # Helper functions
+├── Dockerfile
+├── requirements.txt
+└── README.md
 ```
 
 ## Installation
 
 ### Prerequisites
-- Python 3.8+
-- Virtual environment (already exists as `torch_gpu`)
+- Python 3.11 recommended (the Dockerfile uses `python:3.11-slim`)
+- A virtual environment is recommended
 
 ### Setup
 
-1. **Install dependencies** in the existing `torch_gpu` environment:
+```bash
+cd sms_parsing
+pip install -r requirements.txt
+```
+
+Pinned versions: `tensorflow==2.17.0`, `keras==3.5.0`, `numpy==2.0.2`, `pandas==2.2.3`, `scikit-learn==1.5.2`, `matplotlib==3.9.2`, `seaborn==0.13.2`.
+
+### Docker (optional)
 
 ```bash
-# Navigate to project directory
-cd sms_classifier
-
-# Install required packages (if not already installed)
-pip install tensorflow numpy pandas scikit-learn matplotlib keras
+docker build -t sms-parsing .
+docker run -it sms-parsing        # starts the interactive predictor
 ```
-
-2. **Place the dataset**:
-
-Ensure `indian_sms_dataset.csv` is in the `dataset/` folder with columns:
-- `text` - SMS message content
-- `label` - SMS category (one of the 8 classes)
-
-## Usage
-
-### 1. Training
-
-Train the model on the SMS dataset:
-
-```bash
-python train.py
-```
-
-**What happens:**
-- Loads the dataset from `dataset/indian_sms_dataset.csv`
-- Splits into 80% training, 10% validation, 10% testing
-- Preprocesses text (cleaning, tokenization, padding)
-- Builds the CNN-LSTM model
-- Trains for 20 epochs with batch size 32
-- Uses callbacks:
-  - **EarlyStopping**: Stops if validation loss doesn't improve for 5 epochs
-  - **ReduceLROnPlateau**: Reduces learning rate if validation loss plateaus
-  - **ModelCheckpoint**: Saves the best model based on validation accuracy
-- Saves model, preprocessor, and training history
-
-**Expected output:**
-```
-============================================================
-SMS CLASSIFICATION - TRAINING
-============================================================
-
-[1/5] Loading dataset...
-✓ Loaded 1000 samples from dataset/indian_sms_dataset.csv
-✓ Classes: ['Bills' 'Food' 'OTP' 'Personal' 'Promotion' 'Shopping' 'Transaction' 'Travel']
-✓ Class distribution:
-Bills           125
-Food            125
-...
-
-[2/5] Splitting dataset...
-✓ Dataset split:
-  - Training: 800 samples (80.0%)
-  - Validation: 100 samples (10.0%)
-  - Testing: 100 samples (10.0%)
-
-[3/5] Preprocessing data...
-✓ Vocabulary size: 2845
-✓ Number of classes: 8
-✓ Max sequence length: 100
-
-[4/5] Building model...
-Model: "sequential"
-...
-
-[5/5] Training model...
-Epoch 1/20
-25/25 [==============================] - 2s 65ms/step - loss: 2.0789 - accuracy: 0.1375 - val_loss: 1.9354 - val_accuracy: 0.25
-...
-```
-
-### 2. Evaluation
-
-Evaluate the trained model and generate metrics:
-
-```bash
-python evaluate.py
-```
-
-**What happens:**
-- Loads the best trained model
-- Loads the preprocessor
-- Evaluates on test set
-- Computes and displays:
-  - **Accuracy**: Overall correctness
-  - **Precision**: True positives / (True positives + False positives)
-  - **Recall**: True positives / (True positives + False negatives)
-  - **F1 Score**: Harmonic mean of precision and recall
-  - **Classification Report**: Per-class metrics
-- Generates plots:
-  - **Confusion Matrix**: Shows classification performance per class
-  - **Training History**: Shows accuracy and loss over epochs
-
-**Expected output:**
-```
-============================================================
-SMS CLASSIFICATION - EVALUATION
-============================================================
-
-[1/5] Loading model...
-✓ Model loaded from models/saved/best_model.h5
-
-[2/5] Loading preprocessor...
-✓ Preprocessor loaded
-
-[3/5] Preparing test data...
-✓ Test set prepared: 100 samples
-
-[4/5] Evaluating model...
-
-Metric               Score     
-------------------------------
-Accuracy             0.9800
-Precision            0.9812
-Recall               0.9800
-F1 Score             0.9805
-
-CLASSIFICATION REPORT:
-              precision    recall  f1-score   support
-
-        Bills       1.00      1.00      1.00        12
-         Food       1.00      0.92      0.96        12
-          OTP       1.00      1.00      1.00        13
-      Personal       0.92      1.00      0.96        12
-    Promotion       1.00      1.00      1.00        13
-     Shopping       0.93      0.93      0.93        15
-   Transaction       1.00      1.00      1.00        13
-       Travel       1.00      1.00      1.00        17
-
-    accuracy                           0.98       107
-   macro avg       0.98      0.98      0.98       107
-weighted avg       0.98      0.98      0.98       107
-
-[5/5] Generating plots...
-✓ Confusion matrix saved to plots/confusion_matrix.png
-✓ Training history plot saved to plots/training_history.png
-```
-
-### 3. Interactive Prediction
-
-Classify new SMS messages in real-time:
-
-```bash
-python predict.py
-```
-
-**Usage:**
-```
-============================================================
-SMS CLASSIFICATION - INTERACTIVE PREDICTION
-============================================================
-
-Type an SMS to classify. Type 'quit' or 'exit' to exit.
-
-Enter SMS: Rs.500 debited from SBI account
-
-Predicted Class: Transaction
-Confidence: 98.73%
-
-Enter SMS: OTP: 123456 - Valid for 10 minutes
-
-Predicted Class: OTP
-Confidence: 99.45%
-
-Enter SMS: quit
-
-Thank you for using SMS Classifier!
-```
-
-**Example SMS inputs:**
-
-| SMS Text | Expected Class |
-|----------|-----------------|
-| Rs.500 debited from SBI account | Transaction |
-| OTP: 123456 Valid for 10 mins | OTP |
-| 50% off on all items this weekend | Promotion |
-| Bill amount Rs.5000 due on 31st | Bills |
-| Order delivered! Track here | Shopping |
-| Pizza at 50% off. Order now | Food |
-| Flight booking confirmed. PNR: ABC123 | Travel |
-| Hey, how are you? | Personal |
-
-### 4. Full Finance Tracker Pipeline (integrated from sms_classifier_lstm_cnn)
-
-Beyond the single 8-class classifier above, this project now includes the
-end-to-end pipeline ported from the `sms_classifier_lstm_cnn` project:
-
-```
-SMS text
-  → regex preprocessing (preprocessing/preprocess.py — SMSPreprocessor.clean_text)
-  → Binary Transaction / Non-Transaction decision
-    (derived from this project's CNN+GRU model, models/saved/best_model.keras)
-  → if Non-Transaction: return immediately (same response shape as the
-    original LSTM+CNN project)
-  → if Transaction:
-      → regex entity extraction (transaction_extractor.py)
-      → CNN+GRU Transaction Subcategory classification
-        (models/saved/fintech_model.keras, trained by train_fintech.py)
-```
-
-Run it with:
-
-```bash
-# Interactive
-python predict.py --pipeline
-
-# Batch (reads a 'text' column from a CSV)
-python predict.py --pipeline --batch dataset/real_sms.csv
-```
-
-The subcategory model is trained separately — if `models/saved/fintech_model.keras`
-doesn't exist yet, run `python train_fintech.py` first. The original single-model
-`python predict.py` (no `--pipeline` flag) still works exactly as before.
-
-New files added for this integration:
-- `transaction_extractor.py` — regex-based entity extraction (amount, date,
-  account, bank, beneficiary, etc.), reused unchanged from the LSTM+CNN project.
-- `spend_classifier.py` — rule + ML hybrid Transaction Subcategory classifier,
-  reused from the LSTM+CNN project but now backed by this project's own
-  CNN+GRU `fintech_model.keras` instead of the CNN+LSTM one.
-- `FinanceTrackerPipeline` class (in `predict.py`) — orchestrates the full
-  binary → subcategory workflow described above.
 
 ## Model Architecture
 
-The hybrid CNN-LSTM architecture combines convolutional and recurrent layers:
+Defined in `models/model.py` as `build_cnn_gru_model()`:
 
 ```
-Input (Sequence of integers)
+Input (token IDs, length 32)
         ↓
-Embedding Layer (128 dimensions)
+Embedding (128 dimensions)
         ↓
-Conv1D (128 filters, kernel size 5) + ReLU
+Conv1D (128 filters, kernel size 5, ReLU, padding="same")
         ↓
 MaxPooling1D (pool size 2)
         ↓
-LSTM (128 units, stateless)
+LayerNormalization
         ↓
-Dropout (50%)
+GRU (128 units, return_sequences=True)
+        ↓
+GlobalMaxPooling1D
+        ↓
+Dropout
         ↓
 Dense (64 units) + ReLU
         ↓
 Dropout (30%)
         ↓
-Dense (8 units) + Softmax
-        ↓
-Output (Class probabilities)
+Dense (num_classes) + Softmax
 ```
 
-**Why this architecture?**
-- **Embedding**: Converts word indices to dense vectors for semantic meaning
-- **Conv1D**: Captures local patterns and short dependencies in SMS text
-- **LSTM**: Captures long-term dependencies and sequential information
-- **Dropout**: Prevents overfitting by randomly dropping neurons
-- **Dense layers**: Learns complex non-linear relationships
-- **Softmax**: Outputs probability distribution over 8 classes
+**Why each layer?**
+- **Embedding**: converts word indices to dense vectors.
+- **Conv1D + MaxPool**: detects local keyword patterns such as "debited for", "trf to" and "OTP is", and halves the sequence length.
+- **LayerNormalization**: keeps the unbounded ReLU output in a safe range so the GRU's sigmoid/tanh gates do not saturate. A saturated GRU has no separate cell state to fall back on, which causes the model to collapse to predicting the majority class.
+- **GRU**: captures sequential context with two gates (update and reset) and no separate cell state.
+- **GlobalMaxPooling1D**: pools over all timesteps instead of using only the last one. SMS are short and heavily padded, so the final timestep is mostly padding.
+- **Dropout + Dense**: regularisation and a non-linear classification head.
+- **Softmax**: class probabilities.
 
-## Preprocessing Details
+**Configuration used**
 
-The preprocessing pipeline:
+| Setting | Main classifier (`train.py`) | Spend classifier (`train_fintech.py`) |
+|---|---|---|
+| Max vocabulary | 5,000 | 8,000 |
+| Sequence length | 32 | 32 |
+| Dropout (after GRU) | 0.5 (default) | 0.4 |
+| Output classes | 8 | 10 |
+| Max epochs | 20 | 25 |
+| Batch size | 32 | 32 |
 
-1. **Text Cleaning**:
-   - Convert to lowercase
-   - Remove URLs and email addresses
-   - Remove extra whitespace
+### Why GRU instead of LSTM?
+
+| | LSTM | GRU |
+|---|---|---|
+| Gates | 3 (input, forget, output) | 2 (update, reset) |
+| Recurrent params (128 units, 128-dim input) | 131,584 | 98,688 |
+| Cell state | Separate | None (single hidden state) |
+
+At these sizes the GRU saves about 32,896 parameters (~25%) in the recurrent layer, and trains faster with a lower memory footprint. `benchmark_comparison.py` measures parameters, time per epoch, memory and accuracy for both on your own machine.
+
+GRU equations:
+
+```
+z  = sigmoid(Wz · [h_prev, x])        # update gate
+r  = sigmoid(Wr · [h_prev, x])        # reset gate
+h~ = tanh(W · [r * h_prev, x])        # candidate hidden state
+h  = (1 - z) * h_prev + z * h~        # new hidden state
+```
+
+## Preprocessing
+
+1. **Text cleaning**
+   - Lowercase; remove URLs and email addresses; collapse extra whitespace
    - Preserve important symbols: ₹, Rs., numbers, letters, X (account masks)
    - Remove most punctuation except periods and hyphens
+2. **Tokenisation**: words are mapped to indices with an `<OOV>` token for unknown words (vocabulary size 5,000 for the main model, 8,000 for the spend model)
+3. **Padding / truncation** to 32 tokens
+4. **Label encoding** with a saved `LabelEncoder` for inference
 
-2. **Tokenization**:
-   - Convert text to sequences of word indices
-   - Vocabulary size: 5,000 most common words
-   - Unknown words mapped to `<UNK>` token
+The fitted tokenizer and label encoder are pickled to `preprocessors/` so training and inference use identical preprocessing.
 
-3. **Padding**:
-   - Pad sequences to fixed length: 100 tokens
-   - Short sequences padded with zeros
-   - Long sequences truncated
+## Usage
 
-4. **Label Encoding**:
-   - Convert class labels to integer indices (0-7)
-   - Preserved in LabelEncoder for inference
+### 1. Train the main classifier
+
+```bash
+python train.py
+```
+
+- Loads `indian_sms_dataset.csv` and `hard_realistic_augment.csv`
+- Removes exact-duplicate messages
+- Splits **80/10/10 grouped by message template** (see below)
+- Trains with batch size 32 for up to 20 epochs
+- Reports per-epoch time and memory, and compares against the CNN-LSTM baseline
+- Saves the model, preprocessor, history and plots
+
+### 2. Train the spend-category model
+
+Run **after** `train.py`:
+
+```bash
+python train_fintech.py
+```
+
+- Trains on `spend_category_dataset.csv` (10 classes), removes duplicate texts, stratified 80/10/10 split
+- Up to 25 epochs, batch size 32
+- Saves `fintech_model.keras`, `fintech_model_final.keras` and `fintech_preprocessor.pkl`
+
+### 3. Evaluate
+
+```bash
+python evaluate.py
+```
+
+Reports accuracy, precision, recall and F1, a per-class classification report, a confusion matrix and training curves.
+
+### 4. Predict
+
+```bash
+# Single 8-class classifier, interactive
+python predict.py
+
+# Full pipeline (binary → entity extraction → spend category), interactive
+python predict.py --pipeline
+
+# Full pipeline on a CSV with a 'text' column
+python predict.py --pipeline --batch dataset/real_sms.csv
+
+# Custom model or preprocessor paths
+python predict.py --model path/to/model.keras --preprocessor path/to/preprocessor.pkl
+```
+
+Example:
+
+| SMS Text | Predicted Class |
+|---|---|
+| Rs.500 debited from SBI account | Transaction |
+| OTP: 123456 Valid for 10 mins | OTP |
+| 50% off on all items this weekend | Promotion |
+| Bill amount Rs.5000 due on 31st | Bills |
+| Flight booking confirmed. PNR: ABC123 | Travel |
+| Hey, how are you? | Personal |
+
+If `models/saved/fintech_model.keras` is missing, run `python train_fintech.py` before using `--pipeline`.
+
+### 5. Benchmark and diagnostics
+
+```bash
+python benchmark_comparison.py    # CNN+LSTM vs CNN+GRU on your machine
+python diagnose_gru.py            # per-layer gradient norms for the GRU model
+```
 
 ## Training Configuration
 
-- **Optimizer**: Adam (learning rate: 0.001)
+- **Optimizer**: Adam (learning rate 0.001, `clipnorm=1.0` as a safeguard against exploding gradients)
 - **Loss**: SparseCategoricalCrossentropy
 - **Metric**: Accuracy
-- **Epochs**: 20 (with early stopping)
-- **Batch Size**: 32
-- **Train/Val/Test Split**: 80/10/10
-- **Random Seed**: 42 (for reproducibility)
+- **Random seed**: 42
 
-## Callbacks
+**Callbacks**
+1. **EarlyStopping**: monitors validation loss, patience 5, restores best weights
+2. **ReduceLROnPlateau**: monitors validation loss, factor 0.5, patience 3, min LR 1e-7
+3. **ModelCheckpoint**: monitors validation accuracy, saves only the best model
 
-1. **EarlyStopping**:
-   - Monitor: validation loss
-   - Patience: 5 epochs
-   - Restores best weights
+## Avoiding Data Leakage
 
-2. **ReduceLROnPlateau**:
-   - Monitor: validation loss
-   - Factor: 0.5 (multiply learning rate by 0.5)
-   - Patience: 3 epochs
-   - Min learning rate: 1e-7
+Many SMS differ only in the amount, OTP or reference number, so a random split lets near-identical messages appear in both train and test and inflates accuracy. `train.py` therefore:
 
-3. **ModelCheckpoint**:
-   - Monitor: validation accuracy
-   - Saves only the best model
+1. Drops exact-duplicate texts
+2. Converts each message to a structural **template** by masking numbers, OTPs and reference IDs
+3. Uses `StratifiedGroupKFold` to keep all messages with the same template in a single split while preserving class balance
+4. Asserts that **no template is shared** across train, validation and test
 
-## Expected Performance
+Accuracy on this template-grouped test set (**91.67%** on the 8-class task) is lower than a naive random split would give, but a more honest estimate of real-world performance.
 
-On the synthetic Indian SMS dataset:
+## Known Issues & Workarounds
 
-- **Test Accuracy**: 97-99%
-- **Precision**: 97-99% (weighted average)
-- **Recall**: 97-99% (weighted average)
-- **F1 Score**: 97-99%
+- **oneDNN GRU bug (Windows CPU):** TensorFlow's oneDNN-accelerated GRU kernel can silently break gradient flow, which freezes loss and accuracy at the majority-class baseline. The training scripts set `TF_ENABLE_ONEDNN_OPTS=0` before importing TensorFlow.
+- **Deterministic ops:** `TF_DETERMINISTIC_OPS=1` also breaks GRU gradient flow on CPU, so the scripts turn it back off after seeding. NumPy, Python and TensorFlow seeds are unaffected.
+- `reset_after=False` is used in the GRU layer (classic GRU formulation, compatible with the parameter count above).
 
-The high performance is expected because:
-- The dataset is well-balanced (equal samples per class)
-- Classes are well-separated semantically
-- The synthetic data doesn't contain the noise of real-world SMS
-- The model is specifically designed for SMS classification
+## Limitations
 
-## Limitations of Synthetic Data
+- Datasets are largely synthetic or template-based; real SMS contain typos, abbreviations, Hinglish, regional languages and emojis
+- Out-of-vocabulary words are common in real messages
+- Class distributions in the real world are imbalanced, unlike the training sets
+- Some messages need conversation context to classify correctly
+- Regional-language SMS are not yet supported
 
-While the model performs excellently on this synthetic dataset, real-world deployment faces challenges:
-
-### Dataset Limitations:
-
-1. **Perfect formatting**: Real SMS contain typos, abbreviations, mixed languages
-2. **Balanced distribution**: Real-world SMS have unbalanced class distributions
-3. **Structured messages**: Synthetic SMS follow patterns; real SMS are chaotic
-4. **No slang/colloquialisms**: Missing regional language and informal language
-5. **No context**: Real SMS may be ambiguous without conversation history
-6. **No special characters**: Missing emojis, special symbols common in real SMS
-7. **Language simplicity**: Real SMS contain Hinglish, code-switching, abbreviations
-
-### Model Limitations for Real-World Use:
-
-1. **Domain shift**: Performance drops when tested on truly unseen SMS patterns
-2. **Class imbalance**: Real data has skewed class distributions
-3. **Temporal changes**: New SMS patterns emerge over time
-4. **Language evolution**: Slang and abbreviations change constantly
-5. **Out-of-vocabulary words**: Many real-world terms won't be in training vocabulary
-6. **Multi-language**: Indian SMS often mix English and Indian languages
-7. **Context dependency**: Some SMS require conversation context for classification
-
-### Recommended Improvements for Real-World Deployment:
-
-1. **Data collection**: Gather real SMS from diverse sources
-2. **Augmentation**: Use data augmentation (back-translation, synonym replacement)
-3. **Class balancing**: Use techniques like oversampling, undersampling, SMOTE
-4. **Transfer learning**: Pre-train on large SMS corpus
-5. **Ensemble methods**: Combine multiple models
-6. **Active learning**: Continuously improve with hard examples
-7. **Regular retraining**: Update model periodically with new data
-8. **Multi-language support**: Include models for different languages
-9. **Human-in-the-loop**: Review and correct misclassifications
-10. **Uncertainty sampling**: Flag low-confidence predictions
-
-## File Descriptions
-
-### `train.py`
-Main training script. Orchestrates:
-- Dataset loading and splitting
-- Text preprocessing
-- Model building
-- Training with callbacks
-- Model and preprocessor saving
-
-### `evaluate.py`
-Evaluation script that:
-- Loads trained model and preprocessor
-- Computes accuracy, precision, recall, F1 score
-- Generates classification report
-- Plots confusion matrix
-- Plots training history curves
-
-### `predict.py`
-Interactive prediction script with:
-- `SMSClassifier` class for inference
-- `interactive_predict()` function for user input
-- Batch prediction capability
-- Confidence score display
-
-### `preprocessing/preprocess.py`
-Text preprocessing module with:
-- `SMSPreprocessor` class
-- Text cleaning
-- Tokenization and padding
-- Label encoding
-- Serialization/deserialization
-
-### `models/model.py`
-Model architecture definition with:
-- `build_cnn_lstm_model()` function
-- Hybrid CNN-LSTM architecture
-- Model compilation with Adam optimizer
-- `get_model_summary()` helper function
-
-### `utils.py`
-Utility functions:
-- `set_random_seed()` - Set TensorFlow and NumPy seeds
-- `save_object()` - Pickle saving
-- `load_object()` - Pickle loading
-- `create_directories()` - Directory creation
-- `ensure_directory()` - Ensure parent directories exist
-
-## Reproducibility
-
-The project ensures reproducibility by:
-
-1. **Fixed random seed**: 42 set for all random operations
-2. **Deterministic operations**: `TF_DETERMINISTIC_OPS=1`
-3. **Stratified splits**: Maintain class distribution in train/val/test splits
-4. **Saved preprocessor**: Ensures same text processing for inference
-5. **Model checkpointing**: Saves best model for consistent results
-
-## Performance Optimization
-
-For production deployment:
-
-1. **Model quantization**: Convert to TFLite for mobile devices
-2. **Model pruning**: Remove unnecessary weights
-3. **Model distillation**: Train smaller model from larger one
-4. **Caching**: Cache tokenizer vocabulary and embedding matrix
-5. **Batch inference**: Process multiple SMS efficiently
+**Suggested improvements:** collect more real SMS, augment data, balance classes, pretrain on a larger SMS corpus, retrain periodically, flag low-confidence predictions for human review, and quantise to TFLite for on-device deployment.
 
 ## Troubleshooting
 
-### Issue: "FileNotFoundError: Dataset not found"
-**Solution**: Ensure `indian_sms_dataset.csv` is in `dataset/` folder
-
-### Issue: "Model not found" during evaluation or prediction
-**Solution**: Run `python train.py` first to train the model
-
-### Issue: "ModuleNotFoundError: tensorflow"
-**Solution**: Install TensorFlow: `pip install tensorflow`
-
-### Issue: Low accuracy on custom SMS
-**Possible causes**:
-- SMS contains unseen words (out-of-vocabulary)
-- SMS format differs from training data
-- Class boundary is ambiguous
-- Model needs retraining on new data
-
-### Issue: Out of memory during training
-**Solution**:
-- Reduce batch size: `python train.py --batch-size 16`
-- Use fewer epochs: `python train.py --epochs 10`
-- Reduce max vocabulary size in `preprocess.py`
+| Issue | Solution |
+|---|---|
+| `FileNotFoundError: Dataset not found` | Check the CSV files are in `dataset/` with `text` and `label` columns |
+| `Model not found` | Run `python train.py` (and `python train_fintech.py` for `--pipeline`) |
+| `ModuleNotFoundError: tensorflow` | `pip install -r requirements.txt` |
+| Accuracy frozen at a constant value | Make sure `TF_ENABLE_ONEDNN_OPTS=0`, then run `python diagnose_gru.py` |
+| Low accuracy on custom SMS | Unseen vocabulary or an unfamiliar format; retrain with similar examples |
+| Out of memory | Reduce the batch size in the training function |
 
 ## References
 
-- **Paper**: "On-Device Information Extraction from SMS using Hybrid Hierarchical Classification"
-- **TensorFlow/Keras**: https://www.tensorflow.org/
-- **Scikit-learn**: https://scikit-learn.org/
-- **SMS Dataset**: Balanced Indian SMS corpus with 8 categories
+- S. Vatsal et al., "On-Device Information Extraction from SMS using Hybrid Hierarchical Classification," arXiv:2002.02755, 2020.
+- K. Cho et al., "Learning Phrase Representations using RNN Encoder–Decoder for Statistical Machine Translation," EMNLP, 2014. (GRU)
+- TensorFlow / Keras: https://www.tensorflow.org/
+
+## Part of
+
+[Personalized Financial Planning](https://github.com/Shikshith05/Personalized-Financial-Planning), together with `expense_forecasting` and `explainable_rl_planner`.
 
 ## License
 
-This project is created for educational and research purposes.
-
-## Author
-
-SMS Classification Project - 2024
-
----
-
-**Questions or Issues?** Check the troubleshooting section or review the code comments.
+Created for educational and research purposes.
